@@ -1,123 +1,256 @@
-# Market Leakage Lab — Reproducible Next-Day Direction Classification
+﻿# Market Leakage Lab
+### Leakage-Safe Financial Time-Series Machine Learning & Cross-Market Evaluation
 
-A small **Python machine-learning experiment**, designed to demonstrate **point-in-time features, chronological train/validation/test splits, embargoed walk-forward validation, automated tests, honest baselines and reproducible reporting**.
+A Python-based machine learning research pipeline for evaluating next-day market direction using historical price and volume data.
 
-**Scope:** Predict whether the **next daily closing price** will be above today's close, using only information known **after today's market close**. This is **not** high-frequency trading, order-book forecasting, an automated trading bot, or evidence of a profitable strategy.
+The system builds time-aware features, prevents future-data leakage, compares multiple classifiers, applies chronological and walk-forward validation, and measures out-of-sample performance against a statistical baseline.
 
-## What it demonstrates
+**Python | scikit-learn | Pandas | NumPy | Matplotlib | Yahoo Finance**
 
-- Input validation of `Date, Open, High, Low, Close, Volume` and sorted, unique dates
-- Nine features from current and historical bars only (returns, rolling volatility, range, volume)
-- Next-session binary target (`Close[t+1] > Close[t]`) with missing final label excluded
-- 60% train / 20% validation / 20% untouched test, by date, with a one-bar label embargo at each boundary
-- Expanding-window **TimeSeriesSplit(gap=1)** on the training period
-- Majority-class **DummyClassifier** baseline plus Logistic Regression and Random Forest
-- Model selection from validation balanced accuracy **only**, followed by a single final test evaluation
-- Accuracy, balanced accuracy, precision, recall, F1, optional ROC AUC, confusion matrices
-- Dataset SHA-256, seed, versions, periods, fold scores and limitation reporting
-- `pytest` tests and GitHub Actions CI
+---
 
-### Architecture
+## Project Overview
 
-```text
-Real market CSV (optional) ─────┐
-                                 ├─> OHLCV validation ─> point-in-time features
-Explicitly synthetic CSV ───────┘                             │
-                                                             ▼
-                                             next-close label, drop unknown end
-                                                             │
-                                                             ▼
-                                             train ┆ embargo ┆ val ┆ embargo ┆ test
-                                                │                │                │
-                                                ├─ expanding CV ─┤                │
-                                                └─ fit candidates┘                │
-                                                        │                          │
-                                            choose using validation ONLY           │
-                                                        │                          │
-                                           refit before test, embargo ───────────> measure once
-                                                                                │
-                                                                          JSON + REPORT
-```
+Market Leakage Lab investigates whether historical market information provides reliable predictive signals for the next trading session.
 
-## Quick start: offline synthetic **demonstration**
+Rather than relying on random train/test splitting, the project follows chronological evaluation and explicitly accounts for the availability of information at prediction time.
 
-Use Python 3.11 or newer:
+The experiments cover three US exchange-traded funds:
 
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -r requirements-dev.txt
-python -m src.data --demo data/synthetic_demo.csv
-python -m pytest -q
-python -m src.experiment --data data/synthetic_demo.csv --source "SYNTHETIC simulated OHLCV, seed 42" --out outputs/demo
-```
+- **SPY:** S&P 500 market exposure
+- **QQQ:** Nasdaq-100 market exposure
+- **IWM:** Russell 2000 small-cap market exposure
 
-On Linux/macOS replace activation with `source .venv/bin/activate`.
+Each market is processed, trained, selected, and evaluated independently.
 
-Inspect `outputs/demo/REPORT.md` and `outputs/demo/results.json`.
+## Key Features
 
-**Important:** Synthetic results are for validating the code and explaining splits. They do **not** demonstrate a market forecasting result. Never show them as actual financial-data performance.
+### Historical Market Data Processing
 
-## Real market dataset (recommended before sharing with an employer)
+- Downloads historical daily OHLCV records from Yahoo Finance through yfinance.
+- Validates trading dates, numeric prices, volume, and OHLC consistency.
+- Sorts observations chronologically and rejects invalid records.
+- Builds reproducible datasets for independent market experiments.
 
-Option A: Put your own legitimately obtained daily OHLCV CSV at `data/spy_daily.csv`. Its headers must be:
+### Time-Aware Feature Engineering
 
-```csv
-Date,Open,High,Low,Close,Volume
-```
+Generates nine numerical features using current and historical market observations:
 
-Option B: Download with the optional `yfinance` package (requires an internet connection and working upstream service):
-
-```powershell
-python -m pip install yfinance
-python -m src.download --symbol SPY --start 2015-01-01 --end 2026-10-30 --out data/spy_daily.csv
-python -m src.experiment --data data/spy_daily.csv --source "Yahoo Finance daily SPY prices via yfinance (unadjusted)" --out outputs/spy
-```
-
-**Data disclosure:** SPY is an ETF; this is publicly available *daily bar data*, not tick-by-tick bid/ask order-book data. No downloaded market data is included in this repository. Downloaded data is gitignored. Check your data provider's terms and retain a local copy when reproducing a specific run. Calendar year range and provider adjustments are fixed in the command for repeatability, but corporate actions and upstream historical corrections can still affect the dataset; `results.json` includes its hash.
-
-## Why random cross-validation is inappropriate
-
-Random splits can train on chronologically later price observations when predicting earlier observations. In a nonstationary market, that creates an unrealistic evaluation of information available at prediction time. A more subtle issue is **label overlap**: at day *t*, our target uses the close at *t+1*. The final training label cannot use a price observed in the first validation/test sample. We therefore remove a **one-bar gap** at period boundaries and use a `TimeSeriesSplit(gap=1)` expanding-window procedure inside training.
-
-The baseline helps show if model complexity adds real value. Since finance labels can be imbalanced, we use **balanced accuracy** to choose models instead of relying on raw accuracy alone. Even a validation winner can fail on the untouched test period. That is a useful result, not a failure of the project.
-
-## Explicitly checked leakage risks
-
-| Risk | Control |
+| Feature group | Engineered features |
 | --- | --- |
-| Train on future observations | Date-sorted chronological partitions |
-| Feature at day *t* uses future price | Only current / lagged rolling features; perturbation test |
-| Last observation's missing label becomes "down" | Explicit unknown target, removed |
-| Train's next-day label overlaps first validation/test day | One-bar embargo + assertions on target end timestamps |
-| StandardScaler fitted on all rows | Scaler lives in `sklearn.pipeline`; fitted within each fold |
-| Multiple models chosen using test outcome | Model selected by validation only; test checked once |
-| Big accuracy result without baseline | Majority baseline and balanced accuracy |
+| Price momentum | 1-day, 3-day, and 5-day returns |
+| Rolling volatility | 5-day and 20-day return volatility |
+| Intraday price behavior | High-low range and close-to-open return |
+| Trading volume | Volume change and relative 10-day volume |
 
-## Understanding and explaining the experiment
+The prediction target is whether the next trading day's closing price exceeds the current closing price.
 
-Be ready to answer: Why do we make the prediction **after** each daily close? Why is today's volume available at that time? Why is tomorrow's close unavailable? How does the one-bar embargo work? Why does a random K-fold split provide misleading results? Why did validation choose this model? Did it beat the baseline on unseen data? What changed across CV folds? What might fail if applied to real order-book events?
+Features are constructed using information available after the current trading session closes.
 
-**Limitations:** Daily bars conceal intraday bid/ask spreads, market depth, event times, execution costs, queue priority, latency and fills. Historical records may have survivorship/adjustment issues. A single ticker and split cannot establish stable predictive performance. Repeated tuning based on the final test set would invalidate the holdout. No trading or profitability claims.
+### Leakage-Safe Experiment Design
 
-## Repository map
+- Chronological training, validation, and untouched test partitions.
+- One-bar embargo at split boundaries to prevent label overlap.
+- Expanding-window cross-validation using TimeSeriesSplit.
+- Training-only feature scaling through scikit-learn Pipelines.
+- Model selection using validation balanced accuracy without consulting the test results.
+- Automated checks for future-data leakage and invalid target construction.
+
+### Model Training and Comparison
+
+The pipeline evaluates:
+
+- Logistic Regression with standardized numerical features.
+- Random Forest with controlled model complexity.
+- Majority-class DummyClassifier as a baseline.
+
+Candidate models are compared using walk-forward cross-validation and a separate chronological validation set.
+
+The selected model is refitted on permitted pre-test history before final evaluation.
+
+### Evaluation and Reproducibility
+
+- Accuracy, balanced accuracy, precision, recall, F1-score, ROC-AUC where applicable.
+- Confusion matrices and individual model comparison results.
+- Dataset SHA-256 checksums and recorded experiment configurations.
+- JSON and Markdown reports.
+- Cross-market CSV summaries and visualizations.
+- Automated Pytest checks and GitHub Actions CI.
+
+## System Architecture
 
 ```text
-src/data.py         # Validation + explicitly synthetic offline demo
-src/download.py     # Optional real OHLCV download
-src/features.py     # Past/current features + next-day target
-src/experiment.py   # CV, holdouts, model selection, metrics, results
-src/__init__.py
-tests/test_pipeline.py
-.github/workflows/tests.yml
-requirements.txt
-requirements-dev.txt
+Yahoo Finance Historical OHLCV
+              |
+              v
+     Data Validation
+              |
+              v
+    Feature Engineering
+              |
+              v
+    Next-Day Target
+              |
+              v
+ Chronological Data Splits
+    Train / Validation / Test
+              |
+              v
+ Expanding Walk-Forward CV
+              |
+              v
+  Model Comparison & Selection
+              |
+              v
+  Final Out-of-Sample Evaluation
+              |
+              v
+ Cross-Market Results & Reports
 ```
 
-## Provenance and credit
+## Experimental Methodology
 
-This is a compact reproducible experiment template prepared with AI assistance. To present it as evidence of personal engineering skill, **run it on real data, inspect the source, understand the leakage controls, record what happened and make your own meaningful improvements or analysis**. Do not imply you independently authored or validated code that you have not personally worked through. Report failures and unpromising results rather than hiding them.
+The experiments use approximately 60% of labeled records for training, 20% for validation, and 20% for the final test period, with embargoed boundary observations.
 
-## Next extension (not required)
+The final test period remains chronologically separated from model development.
 
-Move to an appropriately licensed **limit-order-book events dataset**, reconstruct mid-price from best bid/ask updates, define an event-time prediction horizon, implement purged/embargoed walk-forward splits accounting for overlapping labels, and evaluate out-of-sample calibration and transaction costs. Do not call the daily-bar baseline HFT.
+Model selection uses validation balanced accuracy, while the majority-class baseline establishes a reference for interpreting performance.
+
+A fixed random seed and recorded dataset hashes support reproducibility.
+
+## Experimental Results
+
+### Cross-Market Evaluation
+
+Experiments were conducted using real historical daily market data covering 2015 through October 2026.
+
+| Market | Selected model | Test balanced accuracy | Majority baseline |
+| --- | --- | ---: | ---: |
+| SPY | Logistic Regression | 49.4% | 50.0% |
+| QQQ | Random Forest | 50.1% | 50.0% |
+| IWM | Random Forest | 49.4% | 50.0% |
+
+The results show that the selected models did not establish a meaningful out-of-sample predictive advantage over the baseline.
+
+This demonstrates the importance of chronological evaluation and baseline comparison when assessing financial ML systems.
+
+### Model vs. Baseline
+
+![Cross-market baseline comparison](reports/portfolio/baseline_comparison.png)
+
+**Figure 1.** Held-out balanced accuracy of the selected model and majority-class baseline for each market.
+
+### Generalization Across Evaluation Stages
+
+![Cross-market generalization](reports/portfolio/generalization.png)
+
+**Figure 2.** Walk-forward cross-validation, validation, and held-out test balanced accuracy across the three experiments.
+
+### Key Findings
+
+- Validation-selected models did not consistently generalize to unseen market periods.
+- A complex model does not automatically outperform a simple baseline.
+- Chronological evaluation makes the assessment more representative of forward-looking prediction.
+- Comparing several markets helps examine whether observed behavior is consistent across datasets.
+- Daily OHLCV classification evaluates market direction, not order-book behavior or trading profitability.
+
+Full metrics and individual experiment details are available in [Cross-Market Results](reports/portfolio/RESULTS.md).
+
+## Technology Stack
+
+| Technology | Purpose |
+| --- | --- |
+| Python | Data processing and experiment implementation |
+| Pandas / NumPy | Time-series preparation and numerical features |
+| scikit-learn | ML models, pipelines, metrics, and validation |
+| Matplotlib | Comparative performance visualizations |
+| yfinance | Historical market data retrieval |
+| Pytest | Automated testing and leakage checks |
+| GitHub Actions | Continuous integration |
+
+## Running the Project
+
+### Requirements
+
+Python 3.11 or newer.
+
+### Setup
+
+```powershell
+py -3.11 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+```
+
+### Run Automated Tests
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q
+```
+
+### Download Historical Data
+
+```powershell
+foreach ($symbol in @("SPY", "QQQ", "IWM")) {
+    $name = $symbol.ToLower()
+    .\.venv\Scripts\python.exe -m src.download --symbol $symbol --start 2015-01-01 --end 2026-11-01 --out "data/$name`_daily.csv"
+}
+```
+
+### Run Market Experiments
+
+```powershell
+foreach ($symbol in @("SPY", "QQQ", "IWM")) {
+    $name = $symbol.ToLower()
+    .\.venv\Scripts\python.exe -m src.experiment --data "data/$name`_daily.csv" --source "Yahoo Finance $symbol daily OHLCV via yfinance" --out "outputs/$name"
+}
+```
+
+### Generate Cross-Market Reports
+
+```powershell
+.\.venv\Scripts\python.exe -m src.summary
+```
+
+Generated results are saved under `outputs/` and `reports/portfolio/`.
+
+Raw data are downloaded separately and are not redistributed with this repository. Provider revisions may affect reproduced results; dataset hashes in the experiment outputs identify the datasets used.
+
+## Repository Structure
+
+```text
+market-leakage-lab/
+|-- src/
+|   |-- data.py
+|   |-- download.py
+|   |-- features.py
+|   |-- experiment.py
+|   `-- summary.py
+|-- tests/
+|-- data/
+|-- outputs/
+|-- reports/
+|   `-- portfolio/
+|       |-- RESULTS.md
+|       |-- metrics.csv
+|       |-- baseline_comparison.png
+|       `-- generalization.png
+|-- examples/
+|-- .github/workflows/
+|-- requirements.txt
+|-- requirements-dev.txt
+`-- README.md
+```
+
+## Research Context
+
+This project is a compact daily-bar ML research workflow developed with AI assistance and locally validated against real historical datasets. It is designed to study reproducible model evaluation and future-data leakage prevention, not to represent a profitable trading strategy or a high-frequency order-book system.
+
+## Author
+
+**Muhammad Abbas**
+
+Software Engineer | Machine Learning & Applied AI
+
+[![GitHub](https://img.shields.io/badge/GitHub-View%20Profile-181717?style=for-the-badge&logo=github)](https://github.com/MdAbbas762)
+
+[![Email](https://img.shields.io/badge/Email-Contact%20Me-D14836?style=for-the-badge&logo=gmail&logoColor=white)](mailto:abbas63891@gmail.com)
